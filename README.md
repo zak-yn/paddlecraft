@@ -39,7 +39,7 @@
 | :--- | :--- |
 | Move Paddle | Drag finger anywhere on screen or touch bar `◀` / `▶` |
 | Rotate Piece | Tap canvas or touch bar `↻ ROTATE` |
-| Hard Drop | Swipe down or touch bar `⚡ DROP` |
+| Hard Drop | Swipe down, double-tap canvas, or touch bar `⚡ DROP` |
 | Pause / Resume | Tap `⏸` in top navigation |
 
 ---

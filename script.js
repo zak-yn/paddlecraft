@@ -1209,30 +1209,54 @@ class Game {
             }
         });
 
-        // Direct Touch Drag, Tap-to-Rotate, and Swipe-to-Drop on Canvas
+        // Direct Touch Drag, Tap-to-Rotate, Instant Drop, and Double-Tap Drop on Canvas
         let touchStartX = 0;
         let touchStartY = 0;
         let touchStartTime = 0;
         let hasMoved = false;
+        let isDropping = false;
+        let isDropGesture = false;
+        let lastTapTime = 0;
 
         const handleTouchMove = (e) => {
             if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
-            if (e.touches.length === 0) return;
+            if (e.touches.length === 0 || isDropping) return;
             e.preventDefault();
 
             const t = e.touches[0];
-            const rect = this.canvas.getBoundingClientRect();
-            const scaleX = CANVAS_WIDTH / rect.width;
-            const touchCanvasX = (t.clientX - rect.left) * scaleX;
+            const deltaX = t.clientX - touchStartX;
+            const deltaY = t.clientY - touchStartY;
 
-            const diff = touchCanvasX - this.paddle.x;
-            if (Math.abs(diff) > 2) {
-                this.paddle.x += diff * 0.65;
-                this.paddle.vx = diff * 12;
+            // Lock horizontal drift when swiping downwards
+            if (deltaY > 16 && deltaY > Math.abs(deltaX) * 1.1) {
+                isDropGesture = true;
             }
 
-            if (Math.abs(t.clientX - touchStartX) > 8 || Math.abs(t.clientY - touchStartY) > 8) {
-                hasMoved = true;
+            // Real-time hard drop trigger: instantly drop piece once downward swipe passes 28px
+            if (isDropGesture && deltaY > 28 && !isDropping) {
+                if (this.currentPiece && !this.currentPiece.isHardDropping) {
+                    this.currentPiece.isHardDropping = true;
+                    this.triggerHaptic(20);
+                    isDropping = true;
+                }
+                return;
+            }
+
+            // Move paddle horizontally only when not executing a downward drop
+            if (!isDropGesture) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = CANVAS_WIDTH / rect.width;
+                const touchCanvasX = (t.clientX - rect.left) * scaleX;
+
+                const diff = touchCanvasX - this.paddle.x;
+                if (Math.abs(diff) > 2) {
+                    this.paddle.x += diff * 0.65;
+                    this.paddle.vx = diff * 12;
+                }
+
+                if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
+                    hasMoved = true;
+                }
             }
         };
 
@@ -1241,11 +1265,26 @@ class Game {
             if (e.touches.length === 0) return;
             e.preventDefault();
 
+            const now = performance.now();
             const t = e.touches[0];
             touchStartX = t.clientX;
             touchStartY = t.clientY;
-            touchStartTime = performance.now();
+            touchStartTime = now;
             hasMoved = false;
+            isDropping = false;
+            isDropGesture = false;
+
+            // Double-Tap to Hard Drop (foolproof, stable, zero horizontal drift)
+            if (now - lastTapTime < 320) {
+                if (this.currentPiece && !this.currentPiece.isHardDropping) {
+                    this.currentPiece.isHardDropping = true;
+                    this.triggerHaptic(20);
+                    isDropping = true;
+                    lastTapTime = 0;
+                    return;
+                }
+            }
+            lastTapTime = now;
 
             handleTouchMove(e);
         }, { passive: false });
@@ -1254,6 +1293,8 @@ class Game {
 
         this.canvas.addEventListener('touchend', (e) => {
             if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
+            if (isDropping) return;
+
             const touchDuration = performance.now() - touchStartTime;
 
             if (e.changedTouches.length > 0) {
@@ -1261,17 +1302,17 @@ class Game {
                 const deltaY = t.clientY - touchStartY;
                 const deltaX = t.clientX - touchStartX;
 
-                // Downward flick / swipe gesture -> Hard Drop!
-                if (deltaY > 36 && Math.abs(deltaY) > Math.abs(deltaX) * 1.2 && touchDuration < 350) {
-                    if (this.currentPiece) {
+                // Fast flick fallback
+                if (deltaY > 24 && deltaY > Math.abs(deltaX) && touchDuration < 320) {
+                    if (this.currentPiece && !this.currentPiece.isHardDropping) {
                         this.currentPiece.isHardDropping = true;
-                        this.triggerHaptic(18);
+                        this.triggerHaptic(20);
+                        return;
                     }
-                    return;
                 }
 
-                // Quick Tap without significant drag -> Rotate piece!
-                if (!hasMoved && touchDuration < 250) {
+                // Quick single tap without significant drag -> Rotate piece!
+                if (!hasMoved && !isDropGesture && touchDuration < 250) {
                     if (this.currentPiece) {
                         this.currentPiece.rotate();
                         this.triggerHaptic(10);
