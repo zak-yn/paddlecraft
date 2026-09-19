@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#090d16">
+    <title>PaddleCraft - Minimalist Brick Breaker & Tetris Action</title>
+    <meta name="description" content="Minimalist modular brick breaker puzzle action. Catch balls, dock falling tetrominoes to expand your paddle, and build wide 8-block rows to trigger devastating Mega Clears!">
+    <meta property="og:title" content="PaddleCraft - Minimalist Brick Breaker & Tetris Action">
+    <meta property="og:description" content="Catch balls, dock tetrominoes to expand your paddle, and unleash devastating Mega Clears!">
+    <meta property="og:type" content="website">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="PaddleCraft - Minimalist Brick Breaker & Tetris Action">
+    <meta name="twitter:description" content="Catch balls, dock tetrominoes to expand your paddle, and unleash devastating Mega Clears!">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230f172a'/><rect x='25' y='38' width='50' height='24' rx='6' fill='%2338bdf8'/><circle cx='50' cy='50' r='5' fill='%23f43f5e'/></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-wrap">
+        <!-- Minimal Top Bar -->
+        <header class="top-nav">
+            <div class="nav-brand">
+                <span class="brand-dot"></span>
+                <span class="brand-title">PaddleCraft</span>
+            </div>
+
+            <div class="nav-stats">
+                <div class="stat-pill">
+                    <span class="pill-label">STAGE</span>
+                    <span id="level-display" class="pill-value">1</span>
+                </div>
+                <div class="stat-pill">
+                    <span class="pill-label">SCORE</span>
+                    <span id="score-display" class="pill-value">0</span>
+                </div>
+                <div class="stat-pill">
+                    <span class="pill-label">BEST</span>
+                    <span id="high-score-display" class="pill-value">0</span>
+                </div>
+                <div class="stat-pill balls-pill">
+                    <span class="pill-label">BALLS</span>
+                    <div id="lives-icons" class="balls-row">
+                        <span class="ball-pip active"></span>
+                        <span class="ball-pip active"></span>
+                        <span class="ball-pip active"></span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="nav-actions">
+                <button id="pause-btn" class="icon-toggle" title="Pause Game (P or Esc)" aria-label="Pause Game">
+                    <svg class="pause-icon" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="6" y="4" width="4" height="16" rx="1.5"/>
+                        <rect x="14" y="4" width="4" height="16" rx="1.5"/>
+                    </svg>
+                    <svg class="play-icon hidden" viewBox="0 0 24 24" fill="currentColor">
+                        <polygon points="6 4 20 12 6 20 6 4"/>
+                    </svg>
+                </button>
+                <button id="btn-tutorial-trigger" class="btn-ghost" title="Interactive Tutorial">
+                    <span>Tutorial</span>
+                </button>
+                <button id="sound-toggle-btn" class="icon-toggle active" title="Toggle Sound" aria-label="Toggle Sound">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="main-workspace">
+            <!-- Game Viewport Container -->
+            <div class="arena-wrapper">
+                <!-- Tutorial Interactive Guidance Banner -->
+                <div id="tutorial-banner" class="tutorial-banner hidden">
+                    <div class="tutorial-meta">
+                        <span id="tutorial-step-tag" class="step-badge">STEP 1/4</span>
+                        <span id="tutorial-step-title" class="step-title">Paddle Movement</span>
+                    </div>
+                    <p id="tutorial-instruction" class="step-instruction">Catch and bounce the ball twice using Arrow Keys or A / D.</p>
+                    <div class="tutorial-actions">
+                        <span id="tutorial-progress" class="step-progress">Bounces: 0 / 2</span>
+                        <button id="btn-skip-tutorial" class="btn-text">Skip</button>
+                    </div>
+                </div>
+
+                <!-- Danger Threshold Warning -->
+                <div id="danger-banner" class="danger-pill hidden">
+                    <span>Paddle nearing ceiling limit!</span>
+                </div>
+
+                <!-- Ball Lost Notification -->
+                <div id="ball-lost-banner" class="ball-lost-banner hidden">
+                    <div class="lost-tag">BALL LOST</div>
+                    <div class="lost-lives-row">
+                        <span class="lost-label">BALLS LEFT:</span>
+                        <span class="lost-count" id="lost-remaining-count">2</span>
+                        <div class="lost-pips" id="lost-pips">
+                            <span class="lost-pip active"></span>
+                            <span class="lost-pip active"></span>
+                        </div>
+                    </div>
+                    <div class="lost-ready-text">READY... <span id="lost-countdown">2</span>s</div>
+                </div>
+
+                <!-- Canvas -->
+                <canvas id="game-canvas" width="480" height="720"></canvas>
+
+                <!-- Modal: Start Screen -->
+                <div id="start-overlay" class="modal-backdrop">
+                    <div class="modal-card">
+                        <div class="modal-tag">MINIMALIST PUZZLE ACTION</div>
+                        <h2 class="modal-title">PaddleCraft</h2>
+                        <p class="modal-desc">
+                            Catch balls, dock incoming tetrominoes to expand your paddle, and build wide 8-block rows to trigger devastating <strong>Mega Clears</strong>!
+                        </p>
+                        
+                        <div class="controls-hint">
+                            <div class="hint-row">
+                                <span class="hint-keys"><kbd>←</kbd> <kbd>→</kbd> / <kbd>Touch Drag</kbd></span>
+                                <span class="hint-label">Move Paddle</span>
+                            </div>
+                            <div class="hint-row">
+                                <span class="hint-keys"><kbd>↑</kbd> / <kbd>Tap Canvas</kbd></span>
+                                <span class="hint-label">Rotate Piece</span>
+                            </div>
+                            <div class="hint-row">
+                                <span class="hint-keys"><kbd>↓</kbd> / <kbd>Swipe Down</kbd></span>
+                                <span class="hint-label">Hard Drop</span>
+                            </div>
+                        </div>
+
+                        <div class="modal-buttons">
+                            <button id="start-button" class="btn-main">
+                                <span>Start Game</span>
+                            </button>
+                            <button id="start-tutorial-button" class="btn-sub">
+                                <span>Interactive Tutorial</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Modal: Tutorial Complete -->
+                <div id="tutorial-complete-overlay" class="modal-backdrop hidden">
+                    <div class="modal-card">
+                        <div class="modal-tag tag-success">TRAINING COMPLETED</div>
+                        <h2 class="modal-title">You're Ready!</h2>
+                        <p class="modal-desc">
+                            You've mastered paddle maneuvering, piece docking, executing Mega Clears, and shattering Golden Shields.
+                        </p>
+                        <button id="tutorial-finish-btn" class="btn-main">
+                            <span>Begin Mission</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Modal: Game Over -->
+                <div id="gameover-overlay" class="modal-backdrop hidden">
+                    <div class="modal-card">
+                        <div class="modal-tag tag-danger">GAME OVER</div>
+                        <h2 class="modal-title" id="gameover-title">Mission Ended</h2>
+                        <p class="modal-desc" id="gameover-reason">All balls lost.</p>
+
+                        <div class="stats-summary">
+                            <div class="stat-cell">
+                                <span class="stat-cell-label">SCORE</span>
+                                <span id="final-score" class="stat-cell-val">0</span>
+                            </div>
+                            <div class="stat-cell">
+                                <span class="stat-cell-label">MEGA CLEARS</span>
+                                <span id="final-lines" class="stat-cell-val">0</span>
+                            </div>
+                            <div class="stat-cell">
+                                <span class="stat-cell-label">MAX COMBO</span>
+                                <span id="final-combo" class="stat-cell-val">x1</span>
+                            </div>
+                        </div>
+
+                        <button id="restart-button" class="btn-main">
+                            <span>Play Again</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Modal: Stage Clear -->
+                <div id="stageclear-overlay" class="modal-backdrop hidden">
+                    <div class="modal-card">
+                        <div class="modal-tag tag-success">SECTOR CLEARED</div>
+                        <h2 class="modal-title">Stage Complete!</h2>
+                        <p class="modal-desc">All target defenses cleared. Preparing next sector.</p>
+                        <button id="nextstage-button" class="btn-main">
+                            <span>Next Stage</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Modal: Game Paused -->
+                <div id="pause-overlay" class="modal-backdrop hidden">
+                    <div class="modal-card">
+                        <div class="modal-tag">GAME PAUSED</div>
+                        <h2 class="modal-title">Paused</h2>
+                        <p class="modal-desc">Game is paused. Click Resume or press <kbd>P</kbd> to jump back in.</p>
+                        <button id="resume-button" class="btn-main">
+                            <span>Resume Game</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sleek Minimalist Side HUD -->
+            <aside class="side-hud">
+                <!-- Next Piece Widget -->
+                <div class="hud-card">
+                    <span class="hud-label">NEXT PIECE</span>
+                    <div class="next-piece-box">
+                        <canvas id="next-canvas" width="100" height="100"></canvas>
+                    </div>
+                    <span id="next-piece-type" class="next-type-label">T-Tee</span>
+                </div>
+
+                <!-- Objective Card -->
+                <div class="hud-card" id="objective-box">
+                    <span class="hud-label">OBJECTIVE</span>
+                    <div class="objective-info">
+                        <span id="objective-text" class="obj-primary">Clears: 0 / 1</span>
+                        <span id="objective-badge" class="badge-tag pending">REQUIRED</span>
+                    </div>
+                    <span class="obj-hint">Required to break shields (🛡️)</span>
+                </div>
+
+                <!-- Paddle Agility & Size -->
+                <div class="hud-card compact">
+                    <div class="hud-row">
+                        <span class="hud-label-inline">PADDLE</span>
+                        <span id="weight-label" class="hud-val-inline">3 (Light)</span>
+                    </div>
+                    <div class="hud-row">
+                        <span class="hud-label-inline">TARGETS</span>
+                        <span id="target-count" class="hud-val-inline">0</span>
+                    </div>
+                    <div class="hud-row">
+                        <span class="hud-label-inline">COMBO</span>
+                        <span id="combo-display" class="hud-val-inline">x1</span>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- Touch Controls Bar for Mobile -->
+        <footer class="touch-bar">
+            <button id="btn-touch-left" class="touch-btn touch-btn-nav" aria-label="Move Left">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+            </button>
+            <button id="btn-touch-rotate" class="touch-btn touch-btn-action" aria-label="Rotate">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span class="btn-subtext">ROTATE</span>
+            </button>
+            <button id="btn-touch-drop" class="touch-btn touch-btn-action" aria-label="Hard Drop">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v14M5 12l7 7 7-7"/></svg>
+                <span class="btn-subtext">DROP</span>
+            </button>
+            <button id="btn-touch-right" class="touch-btn touch-btn-nav" aria-label="Move Right">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+            </button>
+        </footer>
+
+        <!-- Hidden compat elements for script.js telemetry without errors -->
+        <div style="display:none;">
+            <span id="lines-cleared">0</span>
+            <div id="weight-bar"></div>
+            <div id="danger-label"></div>
+            <div id="danger-bar"></div>
+            <div id="line-progress-label"></div>
+            <div id="line-progress-bar"></div>
+            <button id="bgm-toggle-btn"></button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
