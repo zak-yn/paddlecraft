@@ -657,17 +657,18 @@ class Paddle {
             }
 
             // 3. Determine which blocks are supported (grounded)
-            // A block is initially supported if it has the core or any cell at baseline ry >= 0
+            // A block is initially supported ONLY if it contains the paddle CORE
+            // (or initial baseline cells connected to the core)
             const supported = new Set();
             for (const b of validBlocks) {
-                if (b.cells.some(c => c.isCore || c.ry >= 0)) {
+                if (b.cells.some(c => c.isCore)) {
                     supported.add(b.pieceId);
                 }
             }
 
             // Propagate support UPWARDS:
             // A block is supported if at least one of its cells rests DIRECTLY on top of a supported block's cell (c.ry + 1)
-            // Note: Horizontal contact NEVER provides support against gravity!
+            // Note: Horizontal contact alone NEVER provides support against gravity!
             let newlySupported = true;
             while (newlySupported) {
                 newlySupported = false;
@@ -690,8 +691,9 @@ class Paddle {
             let stepMoved = false;
             for (const b of validBlocks) {
                 if (!supported.has(b.pieceId)) {
+                    // Check if block can move down
                     const canMoveDown = b.cells.every(c => {
-                        if (c.ry >= 0) return false;
+                        // Allow landing on baseline ry = 0 IF adjacent to supported core paddle
                         const belowCell = cellMap.get(key(c.rx, c.ry + 1));
                         if (!belowCell) return true;
                         if (belowCell.pieceId === b.pieceId) return true;
@@ -713,7 +715,14 @@ class Paddle {
             }
         }
 
-        return anyMoved;
+        // 5. Clean up any loose cells that have no support or dropped past baseline
+        const initialCount = this.cells.length;
+        this.cells = this.cells.filter(c => {
+            if (c.isCore) return true;
+            return supported.has(c.pieceId) && c.ry <= 0;
+        });
+
+        return anyMoved || (this.cells.length !== initialCount);
     }
 
     applyCascadeGravity() {
@@ -2007,11 +2016,16 @@ class Game {
             let hasDocked = false;
             for (const pb of pieceBlocks) {
                 for (const box of paddleBoxes) {
-                    // Generous horizontal tolerance (6px) so blocks don't clip adjacent corners when slotting in
-                    if (pb.px < box.x + box.w - 6 &&
-                        pb.px + CELL_W > box.x + 6 &&
-                        pb.py + CELL_H >= box.y &&
-                        pb.py <= box.y + box.h) {
+                    // Must overlap horizontally with generous tolerance
+                    const isHorizontalOverlap = (pb.px < box.x + box.w - 6) && (pb.px + CELL_W > box.x + 6);
+                    
+                    // Strict landing check: piece bottom is at or just crossing the top surface of the paddle cell
+                    // Lateral side-bumps (where the piece is already level with or below the paddle) are ignored!
+                    const isLandingFromAbove = (pb.py + CELL_H >= box.y) && 
+                                               (pb.py + CELL_H <= box.y + 20) && 
+                                               (pb.py < box.y + 4);
+
+                    if (isHorizontalOverlap && isLandingFromAbove) {
                         hasDocked = true;
                         break;
                     }
