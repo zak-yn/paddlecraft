@@ -1720,10 +1720,20 @@ class Game {
         const paddleCenterGx = Math.round((this.paddle.x - CELL_W / 2) / CELL_W);
         const newPieceId = ++this.paddle.nextPieceId;
 
-        // Unified rigid landing calculation for the ENTIRE tetromino
-        // Determines the lowest safe Y-offset where no block overlaps any existing paddle block.
-        // Guarantees 100% rigid integrity with ZERO missing or deleted blocks!
-        let maxOffsetRy = Infinity;
+        // Calculate the visual grid row based on where the piece actually is when collided
+        const currentGridY = Math.round(p.y / CELL_H);
+        const desiredRy = Math.min(0, currentGridY - this.paddle.gridY);
+
+        let maxPieceRy = -Infinity;
+        for (const [rx, ry] of p.cells) {
+            if (ry > maxPieceRy) maxPieceRy = ry;
+        }
+
+        // Target landing offset: allows side docking at desiredRy when alongside paddle
+        let targetOffsetRy = desiredRy - maxPieceRy;
+
+        // Ensure rigid integrity: piece can never penetrate any existing paddle cell
+        let maxSafeOffsetRy = Infinity;
         for (const [rx, ry] of p.cells) {
             const targetRx = (p.gridX + rx) - paddleCenterGx;
             const colCells = this.paddle.cells.filter(c => c.rx === targetRx);
@@ -1732,17 +1742,17 @@ class Game {
                 allowedRy = Math.min(...colCells.map(c => c.ry)) - 1;
             }
             const maxForThisCell = allowedRy - ry;
-            if (maxForThisCell < maxOffsetRy) {
-                maxOffsetRy = maxForThisCell;
+            if (maxForThisCell < maxSafeOffsetRy) {
+                maxSafeOffsetRy = maxForThisCell;
             }
         }
 
-        if (maxOffsetRy === Infinity) maxOffsetRy = -1;
+        const finalOffsetRy = Math.min(targetOffsetRy, maxSafeOffsetRy);
 
         for (const [rx, ry] of p.cells) {
             const pieceAbsoluteGx = p.gridX + rx;
             const newRx = pieceAbsoluteGx - paddleCenterGx;
-            const newRy = maxOffsetRy + ry;
+            const newRy = finalOffsetRy + ry;
 
             this.paddle.cells.push({
                 rx: newRx,
@@ -2009,16 +2019,22 @@ class Game {
             let hasDocked = false;
             for (const pb of pieceBlocks) {
                 for (const box of paddleBoxes) {
-                    // Must overlap horizontally with generous tolerance
-                    const isHorizontalOverlap = (pb.px < box.x + box.w - 6) && (pb.px + CELL_W > box.x + 6);
-                    
-                    // Strict landing check: piece bottom is at or crossing the top surface of the paddle cell
-                    // Tolerant to varying frame-rates and hard drop velocities
-                    const isLandingFromAbove = (pb.py + CELL_H >= box.y) && 
-                                               (pb.py + CELL_H <= box.y + 32) && 
-                                               (pb.py < box.y + 8);
+                    // Overlap checks
+                    const isHorizontalOverlap = (pb.px < box.x + box.w - 4) && (pb.px + CELL_W > box.x + 4);
+                    const isLateralTouch = (pb.px < box.x + box.w + 4) && (pb.px + CELL_W > box.x - 4);
 
-                    if (isHorizontalOverlap && isLandingFromAbove) {
+                    // 1. Top landing: piece bottom is touching or crossing top surface of paddle box
+                    const isTopLanding = isHorizontalOverlap && 
+                                         (pb.py + CELL_H >= box.y) && 
+                                         (pb.py + CELL_H <= box.y + 24) && 
+                                         (pb.py < box.y + 4);
+
+                    // 2. Side / Lateral collision: piece is at the same vertical level as paddle box and laterally contacted
+                    const isSideCollision = isLateralTouch && 
+                                            (pb.py + CELL_H > box.y + 12) && 
+                                            (pb.py < box.y + box.h);
+
+                    if (isTopLanding || isSideCollision) {
                         hasDocked = true;
                         break;
                     }
