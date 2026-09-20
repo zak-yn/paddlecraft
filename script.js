@@ -657,18 +657,16 @@ class Paddle {
             }
 
             // 3. Determine which blocks are supported (grounded)
-            // A block is initially supported ONLY if it contains the paddle CORE
-            // (or initial baseline cells connected to the core)
+            // A block is initially supported if it contains the paddle CORE or rests on the baseline ry >= 0
             const supported = new Set();
             for (const b of validBlocks) {
-                if (b.cells.some(c => c.isCore)) {
+                if (b.cells.some(c => c.isCore || c.ry >= 0)) {
                     supported.add(b.pieceId);
                 }
             }
 
             // Propagate support UPWARDS:
             // A block is supported if at least one of its cells rests DIRECTLY on top of a supported block's cell (c.ry + 1)
-            // Note: Horizontal contact alone NEVER provides support against gravity!
             let newlySupported = true;
             while (newlySupported) {
                 newlySupported = false;
@@ -691,9 +689,9 @@ class Paddle {
             let stepMoved = false;
             for (const b of validBlocks) {
                 if (!supported.has(b.pieceId)) {
-                    // Check if block can move down
+                    // Check if block can move down - cannot fall below baseline ry = 0
                     const canMoveDown = b.cells.every(c => {
-                        // Allow landing on baseline ry = 0 IF adjacent to supported core paddle
+                        if (c.ry >= 0) return false;
                         const belowCell = cellMap.get(key(c.rx, c.ry + 1));
                         if (!belowCell) return true;
                         if (belowCell.pieceId === b.pieceId) return true;
@@ -715,14 +713,7 @@ class Paddle {
             }
         }
 
-        // 5. Clean up any loose cells that have no support or dropped past baseline
-        const initialCount = this.cells.length;
-        this.cells = this.cells.filter(c => {
-            if (c.isCore) return true;
-            return supported.has(c.pieceId) && c.ry <= 0;
-        });
-
-        return anyMoved || (this.cells.length !== initialCount);
+        return anyMoved;
     }
 
     applyCascadeGravity() {
@@ -1751,7 +1742,7 @@ class Game {
             const pieceAbsoluteGx = p.gridX + rx;
             const newRx = pieceAbsoluteGx - paddleCenterGx;
             const hitRow = Math.round(p.y / CELL_H) + ry;
-            const newRy = hitRow - this.paddle.gridY;
+            const newRy = Math.min(0, hitRow - this.paddle.gridY);
 
             if (!this.paddle.cells.some(c => c.rx === newRx && c.ry === newRy)) {
                 this.paddle.cells.push({
@@ -1960,11 +1951,15 @@ class Game {
         const dt = Math.min((timestamp - this.lastTime) / 1000, 0.1);
         this.lastTime = timestamp;
 
-        if (this.state === 'PLAYING' || this.state === 'TUTORIAL' || this.state === 'CLEARING') {
-            this.update(dt);
+        try {
+            if (this.state === 'PLAYING' || this.state === 'TUTORIAL' || this.state === 'CLEARING') {
+                this.update(dt);
+            }
+            this.render();
+        } catch (err) {
+            console.error('Game loop error:', err);
         }
 
-        this.render();
         requestAnimationFrame(this.loop.bind(this));
     }
 
@@ -2019,11 +2014,11 @@ class Game {
                     // Must overlap horizontally with generous tolerance
                     const isHorizontalOverlap = (pb.px < box.x + box.w - 6) && (pb.px + CELL_W > box.x + 6);
                     
-                    // Strict landing check: piece bottom is at or just crossing the top surface of the paddle cell
-                    // Lateral side-bumps (where the piece is already level with or below the paddle) are ignored!
+                    // Strict landing check: piece bottom is at or crossing the top surface of the paddle cell
+                    // Tolerant to varying frame-rates and hard drop velocities
                     const isLandingFromAbove = (pb.py + CELL_H >= box.y) && 
-                                               (pb.py + CELL_H <= box.y + 20) && 
-                                               (pb.py < box.y + 4);
+                                               (pb.py + CELL_H <= box.y + 32) && 
+                                               (pb.py < box.y + 8);
 
                     if (isHorizontalOverlap && isLandingFromAbove) {
                         hasDocked = true;
