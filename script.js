@@ -356,6 +356,7 @@ class FallingPiece {
         // Spread spawn column across field
         this.gridX = Math.floor(Math.random() * (COLS - 4)) + 2;
         this.y = 0;
+        this.prevY = 0;
         this.speed = 40; // Pixels per second
         this.isHardDropping = false;
     }
@@ -366,6 +367,7 @@ class FallingPiece {
     }
 
     update(dt) {
+        this.prevY = this.y;
         const fallSpeed = this.isHardDropping ? 680 : this.speed;
         this.y += fallSpeed * dt;
     }
@@ -374,7 +376,8 @@ class FallingPiece {
         return this.cells.map(([rx, ry]) => ({
             gx: this.gridX + rx,
             px: (this.gridX + rx) * CELL_W,
-            py: this.y + ry * CELL_H
+            py: this.y + ry * CELL_H,
+            prevPy: (this.prevY !== undefined ? this.prevY : this.y) + ry * CELL_H
         }));
     }
 }
@@ -2057,23 +2060,22 @@ class Game {
             let hasDocked = false;
             for (const pb of pieceBlocks) {
                 for (const box of paddleBoxes) {
-                    // Overlap checks
-                    const isHorizontalOverlap = (pb.px < box.x + box.w - 4) && (pb.px + CELL_W > box.x + 4);
-                    const isLateralTouch = (pb.px < box.x + box.w + 4) && (pb.px + CELL_W > box.x - 4);
+                    // Check horizontal alignment with paddle block (must overlap significantly)
+                    const isHorizontalOverlap = (pb.px < box.x + box.w - 6) && (pb.px + CELL_W > box.x + 6);
+                    if (!isHorizontalOverlap) continue;
 
-                    // 1. Top landing: piece bottom is touching or crossing top surface of paddle block directly underneath
-                    const isTopLanding = isHorizontalOverlap && 
-                                         (pb.py + CELL_H >= box.y) && 
-                                         (pb.py + CELL_H <= box.y + 26) && 
-                                         (pb.py < box.y + 4);
+                    const prevBottom = pb.prevPy + CELL_H;
+                    const currBottom = pb.py + CELL_H;
 
-                    // 2. Floor landing alongside paddle: only when piece has fallen all the way to floor baseline
-                    const isFloorLanding = isLateralTouch && 
-                                           (box.ry === 0) && 
-                                           (pb.py + CELL_H >= floorBottom - 8) && 
-                                           (pb.py < floorBottom + 12);
+                    // STRICT TOP LANDING ONLY:
+                    // 1. In previous frame, the piece block was strictly at or above the paddle block's top surface
+                    // 2. In current frame, the piece block reaches or crosses the paddle block's top surface
+                    // 3. The piece top is still above the paddle block's top surface
+                    // -> This guarantees that hitting a piece laterally from the side NEVER causes it to dock!
+                    const wasAbove = prevBottom <= box.y + 2;
+                    const isNowTouchingTop = (currBottom >= box.y) && (pb.py < box.y + 4);
 
-                    if (isTopLanding || isFloorLanding) {
+                    if (wasAbove && isNowTouchingTop) {
                         hasDocked = true;
                         break;
                     }
