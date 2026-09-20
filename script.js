@@ -1209,56 +1209,16 @@ class Game {
             }
         });
 
-        // Direct Touch Drag, Tap-to-Rotate, Instant Drop, and Double-Tap Drop on Canvas
+        // Smooth Relative Touch Drag, Tap-to-Rotate, and Downward Swipe Drop
+        let touchActive = false;
+        let lastTouchX = 0;
+        let lastTouchY = 0;
         let touchStartX = 0;
         let touchStartY = 0;
         let touchStartTime = 0;
-        let hasMoved = false;
-        let isDropping = false;
-        let isDropGesture = false;
+        let touchTotalDist = 0;
+        let isDropTriggered = false;
         let lastTapTime = 0;
-
-        const handleTouchMove = (e) => {
-            if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
-            if (e.touches.length === 0 || isDropping) return;
-            e.preventDefault();
-
-            const t = e.touches[0];
-            const deltaX = t.clientX - touchStartX;
-            const deltaY = t.clientY - touchStartY;
-
-            // Lock horizontal drift when swiping downwards
-            if (deltaY > 16 && deltaY > Math.abs(deltaX) * 1.1) {
-                isDropGesture = true;
-            }
-
-            // Real-time hard drop trigger: instantly drop piece once downward swipe passes 28px
-            if (isDropGesture && deltaY > 28 && !isDropping) {
-                if (this.currentPiece && !this.currentPiece.isHardDropping) {
-                    this.currentPiece.isHardDropping = true;
-                    this.triggerHaptic(20);
-                    isDropping = true;
-                }
-                return;
-            }
-
-            // Move paddle horizontally only when not executing a downward drop
-            if (!isDropGesture) {
-                const rect = this.canvas.getBoundingClientRect();
-                const scaleX = CANVAS_WIDTH / rect.width;
-                const touchCanvasX = (t.clientX - rect.left) * scaleX;
-
-                const diff = touchCanvasX - this.paddle.x;
-                if (Math.abs(diff) > 2) {
-                    this.paddle.x += diff * 0.65;
-                    this.paddle.vx = diff * 12;
-                }
-
-                if (Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8) {
-                    hasMoved = true;
-                }
-            }
-        };
 
         this.canvas.addEventListener('touchstart', (e) => {
             if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
@@ -1267,59 +1227,75 @@ class Game {
 
             const now = performance.now();
             const t = e.touches[0];
+            touchActive = true;
             touchStartX = t.clientX;
             touchStartY = t.clientY;
+            lastTouchX = t.clientX;
+            lastTouchY = t.clientY;
             touchStartTime = now;
-            hasMoved = false;
-            isDropping = false;
-            isDropGesture = false;
+            touchTotalDist = 0;
+            isDropTriggered = false;
 
-            // Double-Tap to Hard Drop (foolproof, stable, zero horizontal drift)
-            if (now - lastTapTime < 320) {
+            // CRITICAL: NEVER MOVE PADDLE ON TOUCHSTART!
+            // Touching screen to tap/rotate must NEVER cause paddle to warp or jump.
+        }, { passive: false });
+
+        this.canvas.addEventListener('touchmove', (e) => {
+            if (!touchActive || (this.state !== 'PLAYING' && this.state !== 'TUTORIAL')) return;
+            if (e.touches.length === 0 || isDropTriggered) return;
+            e.preventDefault();
+
+            const t = e.touches[0];
+            const deltaX = t.clientX - lastTouchX;
+            const deltaY = t.clientY - lastTouchY;
+            const totalDx = t.clientX - touchStartX;
+            const totalDy = t.clientY - touchStartY;
+
+            lastTouchX = t.clientX;
+            lastTouchY = t.clientY;
+            touchTotalDist += Math.hypot(deltaX, deltaY);
+
+            // Fast swipe-down gesture for Hard Drop
+            if (totalDy > 32 && totalDy > Math.abs(totalDx) * 1.3) {
                 if (this.currentPiece && !this.currentPiece.isHardDropping) {
                     this.currentPiece.isHardDropping = true;
-                    this.triggerHaptic(20);
-                    isDropping = true;
-                    lastTapTime = 0;
+                    this.triggerHaptic(25);
+                    isDropTriggered = true;
                     return;
                 }
             }
-            lastTapTime = now;
 
-            handleTouchMove(e);
+            // Smooth RELATIVE drag: paddle tracks finger translation 1:1 with natural feel
+            // Paddle never warps to finger coordinate!
+            if (!isDropTriggered) {
+                const rect = this.canvas.getBoundingClientRect();
+                const scaleX = CANVAS_WIDTH / rect.width;
+                const moveAmount = deltaX * scaleX * 1.12;
+
+                this.paddle.x += moveAmount;
+                this.paddle.vx = (deltaX * scaleX) * 14;
+            }
         }, { passive: false });
 
-        this.canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-
         this.canvas.addEventListener('touchend', (e) => {
-            if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
-            if (isDropping) return;
+            if (!touchActive || (this.state !== 'PLAYING' && this.state !== 'TUTORIAL')) return;
+            touchActive = false;
 
-            const touchDuration = performance.now() - touchStartTime;
+            const duration = performance.now() - touchStartTime;
 
-            if (e.changedTouches.length > 0) {
-                const t = e.changedTouches[0];
-                const deltaY = t.clientY - touchStartY;
-                const deltaX = t.clientX - touchStartX;
-
-                // Fast flick fallback
-                if (deltaY > 24 && deltaY > Math.abs(deltaX) && touchDuration < 320) {
-                    if (this.currentPiece && !this.currentPiece.isHardDropping) {
-                        this.currentPiece.isHardDropping = true;
-                        this.triggerHaptic(20);
-                        return;
-                    }
-                }
-
-                // Quick single tap without significant drag -> Rotate piece!
-                if (!hasMoved && !isDropGesture && touchDuration < 250) {
-                    if (this.currentPiece) {
-                        this.currentPiece.rotate();
-                        this.triggerHaptic(10);
-                    }
+            // Pure Tap: finger moved very little (< 10px) and lifted quickly (< 280ms)
+            // -> Rotate tetromino with ZERO paddle displacement!
+            if (!isDropTriggered && touchTotalDist < 10 && duration < 280) {
+                if (this.currentPiece) {
+                    this.currentPiece.rotate();
+                    this.triggerHaptic(12);
                 }
             }
         }, { passive: false });
+
+        this.canvas.addEventListener('touchcancel', () => {
+            touchActive = false;
+        });
 
         // Main action buttons
         document.getElementById('start-button').addEventListener('click', () => this.startGame());
@@ -1369,8 +1345,11 @@ class Game {
 
         const bindTouch = (el, downCode, actionCallback) => {
             if (!el) return;
+            let isHolding = false;
+
             const startHandler = (e) => {
                 e.preventDefault();
+                isHolding = true;
                 this.triggerHaptic(10);
                 if (actionCallback) {
                     actionCallback();
@@ -1378,13 +1357,16 @@ class Game {
                     this.keys[downCode] = true;
                 }
             };
+
             const endHandler = (e) => {
-                e.preventDefault();
+                if (!isHolding) return;
+                isHolding = false;
                 if (downCode) this.keys[downCode] = false;
             };
 
             el.addEventListener('touchstart', startHandler, { passive: false });
             el.addEventListener('touchend', endHandler, { passive: false });
+            el.addEventListener('touchcancel', endHandler, { passive: false });
             el.addEventListener('mousedown', startHandler);
             el.addEventListener('mouseup', endHandler);
             el.addEventListener('mouseleave', endHandler);
@@ -1738,27 +1720,43 @@ class Game {
         const paddleCenterGx = Math.round((this.paddle.x - CELL_W / 2) / CELL_W);
         const newPieceId = ++this.paddle.nextPieceId;
 
+        // Unified rigid landing calculation for the ENTIRE tetromino
+        // Determines the lowest safe Y-offset where no block overlaps any existing paddle block.
+        // Guarantees 100% rigid integrity with ZERO missing or deleted blocks!
+        let maxOffsetRy = Infinity;
+        for (const [rx, ry] of p.cells) {
+            const targetRx = (p.gridX + rx) - paddleCenterGx;
+            const colCells = this.paddle.cells.filter(c => c.rx === targetRx);
+            let allowedRy = 0; // baseline floor
+            if (colCells.length > 0) {
+                allowedRy = Math.min(...colCells.map(c => c.ry)) - 1;
+            }
+            const maxForThisCell = allowedRy - ry;
+            if (maxForThisCell < maxOffsetRy) {
+                maxOffsetRy = maxForThisCell;
+            }
+        }
+
+        if (maxOffsetRy === Infinity) maxOffsetRy = -1;
+
         for (const [rx, ry] of p.cells) {
             const pieceAbsoluteGx = p.gridX + rx;
             const newRx = pieceAbsoluteGx - paddleCenterGx;
-            const hitRow = Math.round(p.y / CELL_H) + ry;
-            const newRy = Math.min(0, hitRow - this.paddle.gridY);
+            const newRy = maxOffsetRy + ry;
 
-            if (!this.paddle.cells.some(c => c.rx === newRx && c.ry === newRy)) {
-                this.paddle.cells.push({
-                    rx: newRx,
-                    ry: newRy,
-                    color: p.color,
-                    isCore: false,
-                    pieceId: newPieceId
-                });
-            }
+            this.paddle.cells.push({
+                rx: newRx,
+                ry: newRy,
+                color: p.color,
+                isCore: false,
+                pieceId: newPieceId
+            });
 
             // Docking spark particles
             for (let i = 0; i < 5; i++) {
                 this.particles.push(new Particle(
                     pieceAbsoluteGx * CELL_W + CELL_W / 2,
-                    hitRow * CELL_H + CELL_H / 2,
+                    (this.paddle.gridY + newRy) * CELL_H + CELL_H / 2,
                     p.color,
                     (Math.random() - 0.5) * 160,
                     (Math.random() - 0.5) * 160,
@@ -1768,7 +1766,7 @@ class Game {
             }
         }
 
-        // Apply Cascade Gravity so all blocks fall toward floor/supporting blocks
+        // Apply Cascade Gravity so all blocks settle rigidly toward floor/supporting blocks
         this.paddle.applyCascadeGravity();
 
         this.sound.playDock();
