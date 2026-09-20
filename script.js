@@ -780,7 +780,7 @@ class Paddle {
         });
     }
 
-    draw(ctx) {
+    draw(ctx, pendingClearRows = null) {
         const boxes = this.getCellBoxes();
         for (const b of boxes) {
             ctx.save();
@@ -791,16 +791,25 @@ class Paddle {
             const rh = b.h - pad * 2;
             const radius = 6;
 
-            // Matte tile
-            ctx.fillStyle = b.color;
+            const isCharging = pendingClearRows && pendingClearRows.includes(b.ry);
+
+            // Matte tile or bright charging tile
+            ctx.fillStyle = isCharging ? '#ffffff' : b.color;
             this.drawRoundedRect(ctx, rx, ry, rw, rh, radius);
             ctx.fill();
 
-            // Subtle border
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-            ctx.lineWidth = 1;
-            this.drawRoundedRect(ctx, rx, ry, rw, rh, radius);
-            ctx.stroke();
+            // Border (energetic pulsing glow if charging)
+            if (isCharging) {
+                ctx.strokeStyle = '#34d399';
+                ctx.lineWidth = 2.5;
+                this.drawRoundedRect(ctx, rx - 1, ry - 1, rw + 2, rh + 2, radius + 1);
+                ctx.stroke();
+            } else {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+                ctx.lineWidth = 1;
+                this.drawRoundedRect(ctx, rx, ry, rw, rh, radius);
+                ctx.stroke();
+            }
 
             if (b.isCore) {
                 // Calm glowing core indicator
@@ -1100,6 +1109,7 @@ class Game {
 
         this.currentPiece = null;
         this.nextPieceKey = this.getRandomPieceKey();
+        this.pendingLineClears = null;
 
         this.lastTime = 0;
         this.keys = {};
@@ -1467,6 +1477,7 @@ class Game {
 
     setupStage() {
         this.levelLinesCleared = 0;
+        this.pendingLineClears = null;
         this.paddle = new Paddle();
         this.balls = [new Ball(this.paddle.x, (this.paddle.gridY - 1) * CELL_H - 15, 120, -280)];
         this.targetBlocks = [];
@@ -1720,19 +1731,8 @@ class Game {
         const paddleCenterGx = Math.round((this.paddle.x - CELL_W / 2) / CELL_W);
         const newPieceId = ++this.paddle.nextPieceId;
 
-        // Calculate the visual grid row based on where the piece actually is when collided
-        const currentGridY = Math.round(p.y / CELL_H);
-        const desiredRy = Math.min(0, currentGridY - this.paddle.gridY);
-
-        let maxPieceRy = -Infinity;
-        for (const [rx, ry] of p.cells) {
-            if (ry > maxPieceRy) maxPieceRy = ry;
-        }
-
-        // Target landing offset: allows side docking at desiredRy when alongside paddle
-        let targetOffsetRy = desiredRy - maxPieceRy;
-
         // Ensure rigid integrity: piece can never penetrate any existing paddle cell
+        // and rests firmly on supporting paddle block or baseline floor (ry = 0)
         let maxSafeOffsetRy = Infinity;
         for (const [rx, ry] of p.cells) {
             const targetRx = (p.gridX + rx) - paddleCenterGx;
@@ -1747,7 +1747,7 @@ class Game {
             }
         }
 
-        const finalOffsetRy = Math.min(targetOffsetRy, maxSafeOffsetRy);
+        const finalOffsetRy = maxSafeOffsetRy;
 
         for (const [rx, ry] of p.cells) {
             const pieceAbsoluteGx = p.gridX + rx;
@@ -1790,12 +1790,20 @@ class Game {
             return;
         }
 
-        // Check for paddle line clear
-        this.checkPaddleLineClears();
-        if (this.tutorial && this.state === 'TUTORIAL') {
-            this.tutorial.onPieceDocked();
+        // Check for paddle line clear with visual landing confirmation delay
+        const clearableRows = this.getPaddleClearableRows();
+        if (clearableRows.length > 0) {
+            this.pendingLineClears = {
+                rows: clearableRows,
+                timer: 0.16, // 160ms visible landed lock & charge effect before laser fires
+                maxTimer: 0.16
+            };
         } else {
-            this.spawnPiece();
+            if (this.tutorial && this.state === 'TUTORIAL') {
+                this.tutorial.onPieceDocked();
+            } else {
+                this.spawnPiece();
+            }
         }
         this.updateHUD();
     }
@@ -1826,48 +1834,50 @@ class Game {
         }
     }
 
+    getPaddleClearableRows() {
+        const rowsMap = new Map();
+        for (const cell of this.paddle.cells) {
+            if (!rowsMap.has(cell.ry)) rowsMap.set(cell.ry, []);
+            rowsMap.get(cell.ry).push(cell);
+        }
+
+        const clearedRys = [];
+        for (const [ry, rowCells] of rowsMap.entries()) {
+            rowCells.sort((a, b) => a.rx - b.rx);
+            
+            // Calculate maximum contiguous streak without gaps
+            let maxContiguous = 1;
+            let currentStreak = 1;
+            for (let i = 1; i < rowCells.length; i++) {
+                if (rowCells[i].rx === rowCells[i - 1].rx + 1) {
+                    currentStreak++;
+                } else if (rowCells[i].rx !== rowCells[i - 1].rx) {
+                    currentStreak = 1;
+                }
+                if (currentStreak > maxContiguous) maxContiguous = currentStreak;
+            }
+
+            let minRx = rowCells[0].rx;
+            let maxRx = rowCells[rowCells.length - 1].rx;
+            let span = maxRx - minRx + 1;
+            const isFullSolidRow = (span === rowCells.length) && (span >= 7);
+
+            // Trigger ONLY when there are 8+ connected blocks, or a completely solid row of 7+ blocks
+            if (maxContiguous >= 8 || isFullSolidRow) {
+                clearedRys.push(ry);
+            }
+        }
+        return clearedRys;
+    }
+
     checkPaddleLineClears() {
-        let iterations = 0;
-        while (iterations < 6) {
-            iterations++;
-            const rowsMap = new Map();
-            for (const cell of this.paddle.cells) {
-                if (!rowsMap.has(cell.ry)) rowsMap.set(cell.ry, []);
-                rowsMap.get(cell.ry).push(cell);
-            }
-
-            const clearedRys = [];
-            for (const [ry, rowCells] of rowsMap.entries()) {
-                rowCells.sort((a, b) => a.rx - b.rx);
-                
-                // Calculate maximum contiguous streak without gaps
-                let maxContiguous = 1;
-                let currentStreak = 1;
-                for (let i = 1; i < rowCells.length; i++) {
-                    if (rowCells[i].rx === rowCells[i - 1].rx + 1) {
-                        currentStreak++;
-                    } else if (rowCells[i].rx !== rowCells[i - 1].rx) {
-                        currentStreak = 1;
-                    }
-                    if (currentStreak > maxContiguous) maxContiguous = currentStreak;
-                }
-
-                let minRx = rowCells[0].rx;
-                let maxRx = rowCells[rowCells.length - 1].rx;
-                let span = maxRx - minRx + 1;
-                const isFullSolidRow = (span === rowCells.length) && (span >= 7);
-
-                // Trigger ONLY when there are 8+ connected blocks, or a completely solid row of 7+ blocks
-                if (maxContiguous >= 8 || isFullSolidRow) {
-                    clearedRys.push(ry);
-                }
-            }
-
-            if (clearedRys.length > 0) {
-                this.executeLineClear(clearedRys);
-            } else {
-                break;
-            }
+        const clearableRows = this.getPaddleClearableRows();
+        if (clearableRows.length > 0) {
+            this.pendingLineClears = {
+                rows: clearableRows,
+                timer: 0.16,
+                maxTimer: 0.16
+            };
         }
     }
 
@@ -2002,6 +2012,33 @@ class Game {
             return;
         }
 
+        // Line clear visual delay & charging handler
+        if (this.pendingLineClears) {
+            this.pendingLineClears.timer -= dt;
+            if (this.pendingLineClears.timer <= 0) {
+                const rowsToClear = this.pendingLineClears.rows;
+                this.pendingLineClears = null;
+                this.executeLineClear(rowsToClear);
+
+                // Check for cascading line clears
+                const cascadeRows = this.getPaddleClearableRows();
+                if (cascadeRows.length > 0) {
+                    this.pendingLineClears = {
+                        rows: cascadeRows,
+                        timer: 0.14,
+                        maxTimer: 0.14
+                    };
+                } else {
+                    if (this.tutorial && this.state === 'TUTORIAL') {
+                        this.tutorial.onPieceDocked();
+                    } else {
+                        this.spawnPiece();
+                    }
+                }
+                this.updateHUD();
+            }
+        }
+
         // Paddle Controls
         let dir = 0;
         if (this.keys['ArrowLeft'] || this.keys['KeyA']) dir -= 1;
@@ -2015,6 +2052,7 @@ class Game {
 
             const pieceBlocks = this.currentPiece.getAbsoluteBlocks();
             const paddleBoxes = this.paddle.getCellBoxes();
+            const floorBottom = (this.paddle.gridY + 1) * CELL_H;
 
             let hasDocked = false;
             for (const pb of pieceBlocks) {
@@ -2023,18 +2061,19 @@ class Game {
                     const isHorizontalOverlap = (pb.px < box.x + box.w - 4) && (pb.px + CELL_W > box.x + 4);
                     const isLateralTouch = (pb.px < box.x + box.w + 4) && (pb.px + CELL_W > box.x - 4);
 
-                    // 1. Top landing: piece bottom is touching or crossing top surface of paddle box
+                    // 1. Top landing: piece bottom is touching or crossing top surface of paddle block directly underneath
                     const isTopLanding = isHorizontalOverlap && 
                                          (pb.py + CELL_H >= box.y) && 
-                                         (pb.py + CELL_H <= box.y + 24) && 
+                                         (pb.py + CELL_H <= box.y + 26) && 
                                          (pb.py < box.y + 4);
 
-                    // 2. Side / Lateral collision: piece is at the same vertical level as paddle box and laterally contacted
-                    const isSideCollision = isLateralTouch && 
-                                            (pb.py + CELL_H > box.y + 12) && 
-                                            (pb.py < box.y + box.h);
+                    // 2. Floor landing alongside paddle: only when piece has fallen all the way to floor baseline
+                    const isFloorLanding = isLateralTouch && 
+                                           (box.ry === 0) && 
+                                           (pb.py + CELL_H >= floorBottom - 8) && 
+                                           (pb.py < floorBottom + 12);
 
-                    if (isTopLanding || isSideCollision) {
+                    if (isTopLanding || isFloorLanding) {
                         hasDocked = true;
                         break;
                     }
@@ -2490,7 +2529,7 @@ class Game {
         }
 
         // Paddle
-        this.paddle.draw(ctx);
+        this.paddle.draw(ctx, this.pendingLineClears ? this.pendingLineClears.rows : null);
 
         // Ready ball attached to paddle during ball respawn intermission
         if (this.ballLostState) {
