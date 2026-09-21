@@ -1486,6 +1486,26 @@ class Game {
         } catch (e) {}
     }
 
+    fallbackCopy(text, btn, originalHtml) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        try {
+            document.execCommand('copy');
+            btn.innerHTML = '<span>COPIED TO CLIPBOARD! 📋</span>';
+            btn.style.background = 'var(--accent-green)';
+            setTimeout(() => {
+                btn.innerHTML = originalHtml;
+                btn.style.background = '';
+            }, 2200);
+        } catch (e) {}
+        document.body.removeChild(ta);
+    }
+
     initDOMEvents() {
         window.addEventListener('keydown', e => {
             this.keys[e.code] = true;
@@ -1618,6 +1638,32 @@ class Game {
         document.getElementById('start-button').addEventListener('click', () => this.startGame());
         document.getElementById('restart-button').addEventListener('click', () => this.startGame());
         document.getElementById('nextstage-button').addEventListener('click', () => this.nextLevel());
+
+        const shareBtn = document.getElementById('btn-share-score');
+        if (shareBtn) {
+            shareBtn.addEventListener('click', () => {
+                const callsign = (localStorage.getItem('paddlecraft_callsign') || 'PILOT').toUpperCase();
+                const shareText = `🕹️ PaddleCraft\n⚡ Score: ${this.score.toLocaleString()} (Stage ${this.level})\n💥 ${this.linesCleared} Mega Clears\n👤 Pilot: ${callsign}\nCan you beat my rank? 👇\nhttps://paddlecraft.onrender.com`;
+
+                this.triggerHaptic(15);
+                const originalHtml = shareBtn.innerHTML;
+
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(shareText).then(() => {
+                        shareBtn.innerHTML = '<span>COPIED TO CLIPBOARD! 📋</span>';
+                        shareBtn.style.background = 'var(--accent-green)';
+                        setTimeout(() => {
+                            shareBtn.innerHTML = originalHtml;
+                            shareBtn.style.background = '';
+                        }, 2200);
+                    }).catch(() => {
+                        this.fallbackCopy(shareText, shareBtn, originalHtml);
+                    });
+                } else {
+                    this.fallbackCopy(shareText, shareBtn, originalHtml);
+                }
+            });
+        }
 
         // Pause button and modal handlers
         if (this.btnPause) {

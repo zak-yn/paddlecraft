@@ -205,7 +205,10 @@
                         </div>
 
                         <div class="modal-buttons">
-                            <button id="restart-button" class="btn-main">
+                            <button id="btn-share-score" class="btn-main btn-share-score">
+                                <span>⚡ Challenge Friends (Copy Score)</span>
+                            </button>
+                            <button id="restart-button" class="btn-sub">
                                 <span>Play Again</span>
                             </button>
                             <button id="btn-show-leaderboard-gameover" class="btn-sub">
@@ -236,45 +239,6 @@
                         <button id="resume-button" class="btn-main">
                             <span>Resume Game</span>
                         </button>
-                    </div>
-                </div>
-
-                <!-- Modal: Global Leaderboard -->
-                <div id="leaderboard-overlay" class="modal-backdrop hidden">
-                    <div class="modal-card modal-leaderboard">
-                        <div class="leaderboard-header">
-                            <div class="modal-tag tag-leaderboard">HALL OF FAME</div>
-                            <h2 class="modal-title">Global Rankings</h2>
-                            <p class="modal-desc">Top pilots across all sectors. Can you claim the #1 spot?</p>
-                        </div>
-
-                        <div class="leaderboard-body">
-                            <div id="leaderboard-loading" class="leaderboard-status">
-                                <div class="spinner"></div>
-                                <span>Retrieving rankings...</span>
-                            </div>
-                            <div id="leaderboard-error" class="leaderboard-status hidden">
-                                <span id="leaderboard-error-text">Unable to reach leaderboard server.</span>
-                                <button id="btn-retry-leaderboard" class="btn-text">Retry</button>
-                            </div>
-                            <div id="leaderboard-list-wrap" class="leaderboard-list-wrap hidden">
-                                <div class="leaderboard-table-header">
-                                    <span class="col-rank">#</span>
-                                    <span class="col-name">CALLSIGN</span>
-                                    <span class="col-score">SCORE</span>
-                                    <span class="col-stage">STAGE</span>
-                                </div>
-                                <div id="leaderboard-items" class="leaderboard-items">
-                                    <!-- Rows populated via JS -->
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="modal-buttons">
-                            <button id="btn-close-leaderboard" class="btn-main">
-                                <span>Close</span>
-                            </button>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -345,6 +309,45 @@
             <div id="line-progress-label"></div>
             <div id="line-progress-bar"></div>
             <button id="bgm-toggle-btn"></button>
+        </div>
+
+        <!-- Modal: Global Leaderboard (Full-width root level) -->
+        <div id="leaderboard-overlay" class="modal-backdrop hidden">
+            <div class="modal-card modal-leaderboard">
+                <div class="leaderboard-header">
+                    <div class="modal-tag tag-leaderboard">HALL OF FAME</div>
+                    <h2 class="modal-title">Global Rankings</h2>
+                    <p class="modal-desc">Top pilots across all sectors. Can you claim the #1 spot?</p>
+                </div>
+
+                <div class="leaderboard-body">
+                    <div id="leaderboard-loading" class="leaderboard-status">
+                        <div class="spinner"></div>
+                        <span>Retrieving rankings...</span>
+                    </div>
+                    <div id="leaderboard-error" class="leaderboard-status hidden">
+                        <span id="leaderboard-error-text">Unable to reach leaderboard server.</span>
+                        <button id="btn-retry-leaderboard" class="btn-text">Retry</button>
+                    </div>
+                    <div id="leaderboard-list-wrap" class="leaderboard-list-wrap hidden">
+                        <div class="leaderboard-table-header">
+                            <span class="col-rank">#</span>
+                            <span class="col-name">CALLSIGN</span>
+                            <span class="col-score">SCORE</span>
+                            <span class="col-stage">STAGE</span>
+                        </div>
+                        <div id="leaderboard-items" class="leaderboard-items">
+                            <!-- Rows populated via JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="btn-close-leaderboard" class="btn-main">
+                        <span>Close</span>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 
