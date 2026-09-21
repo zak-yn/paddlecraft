@@ -19,6 +19,10 @@
 - **⏸️ Full Game Controls**:
   - Pause button & modal with <kbd>P</kbd> / <kbd>Esc</kbd> support
   - 2.0s ball loss countdown with remaining balls telemetry and glowing paddle ready-ball indicator
+- **🏆 Global Public Leaderboard (Hall of Fame)**:
+  - Real-time ranking with Top 50 high scores across all sectors
+  - Callsign submission modal upon Game Over
+  - Gold, silver, and bronze podium ranking indicators
 - **🔊 Web Audio Synthesizer**: Pure procedural sound effects with zero external audio assets or load delay.
 
 ---
@@ -32,6 +36,7 @@
 | Rotate Piece | <kbd>↑</kbd> or <kbd>Space</kbd> |
 | Hard Drop | <kbd>↓</kbd> |
 | Pause / Resume | <kbd>P</kbd> or <kbd>Esc</kbd> |
+| Leaderboard | Click `🏆 Leaderboard` in top bar |
 | Toggle Audio | Mute icon in top bar |
 
 ### Mobile & Tablet (Touch)
@@ -41,18 +46,22 @@
 | Rotate Piece | Tap canvas or touch bar `↻ ROTATE` |
 | Hard Drop | Swipe down or touch bar `⚡ DROP` |
 | Pause / Resume | Tap `⏸` in top navigation |
+| Leaderboard | Tap `🏆 Leaderboard` in top navigation |
 
 ---
 
-## 🚀 Live Demo & Deployment
+## 🚀 Deployment (Render Blueprint)
 
-This project is built with vanilla HTML5, CSS3, and modern ES6 JavaScript. No build tools or package managers (`npm`) are required.
+This project includes a built-in Node.js / Express backend with JSON file persistence and rate limiting for the global leaderboard.
 
-### Deploying to GitHub Pages
+### Deploying to Render
 1. Push this repository to GitHub.
-2. Go to **Settings** > **Pages**.
-3. Under **Branch**, select `main` and root `/`.
-4. Click **Save**. Your game will be live at `https://<username>.github.io/<repo-name>/`!
+2. Go to **[Render Dashboard](https://dashboard.render.com/)**.
+3. Create a **New +** → **Web Service** (or apply the included `render.yaml` Blueprint).
+4. Connect the repository with:
+   - **Build Command**: `npm install`
+   - **Start Command**: `npm start`
+5. Your game and live leaderboard will run at `https://paddlecraft.onrender.com`!
 
 ---
 

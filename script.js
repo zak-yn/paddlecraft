@@ -1085,6 +1085,259 @@ class TutorialManager {
     }
 }
 
+// Global Leaderboard & Hall of Fame Manager
+class LeaderboardManager {
+    constructor(game) {
+        this.game = game;
+        this.apiBase = '/api/leaderboard';
+        this.overlay = document.getElementById('leaderboard-overlay');
+        this.loadingEl = document.getElementById('leaderboard-loading');
+        this.errorEl = document.getElementById('leaderboard-error');
+        this.errorTextEl = document.getElementById('leaderboard-error-text');
+        this.listWrapEl = document.getElementById('leaderboard-list-wrap');
+        this.itemsEl = document.getElementById('leaderboard-items');
+        this.retryBtn = document.getElementById('btn-retry-leaderboard');
+        this.closeBtn = document.getElementById('btn-close-leaderboard');
+
+        // Nav and trigger buttons
+        this.triggerNavBtn = document.getElementById('btn-leaderboard-trigger');
+        this.triggerStartBtn = document.getElementById('btn-show-leaderboard-start');
+        this.triggerGameOverBtn = document.getElementById('btn-show-leaderboard-gameover');
+
+        // Score submission inside game over
+        this.submitBox = document.getElementById('gameover-submit-box');
+        this.callsignInput = document.getElementById('player-callsign-input');
+        this.submitBtn = document.getElementById('btn-submit-score');
+        this.submitMsg = document.getElementById('submit-status-msg');
+
+        this.hasSubmittedThisSession = false;
+        this.lastSubmittedId = null;
+
+        this.init();
+    }
+
+    init() {
+        if (this.triggerNavBtn) {
+            this.triggerNavBtn.addEventListener('click', () => this.openLeaderboard());
+        }
+        if (this.triggerStartBtn) {
+            this.triggerStartBtn.addEventListener('click', () => this.openLeaderboard());
+        }
+        if (this.triggerGameOverBtn) {
+            this.triggerGameOverBtn.addEventListener('click', () => this.openLeaderboard());
+        }
+        if (this.closeBtn) {
+            this.closeBtn.addEventListener('click', () => this.closeLeaderboard());
+        }
+        if (this.retryBtn) {
+            this.retryBtn.addEventListener('click', () => this.fetchLeaderboard());
+        }
+
+        // Close on background click
+        if (this.overlay) {
+            this.overlay.addEventListener('click', (e) => {
+                if (e.target === this.overlay) {
+                    this.closeLeaderboard();
+                }
+            });
+        }
+
+        // Score submit interactions
+        if (this.submitBtn) {
+            this.submitBtn.addEventListener('click', () => this.submitScore());
+        }
+        if (this.callsignInput) {
+            this.callsignInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    this.submitScore();
+                }
+            });
+            this.callsignInput.addEventListener('input', () => {
+                this.callsignInput.value = this.callsignInput.value.toUpperCase();
+            });
+        }
+    }
+
+    openLeaderboard() {
+        this.game.triggerHaptic(10);
+        if (this.overlay) {
+            this.overlay.classList.remove('hidden');
+            this.fetchLeaderboard();
+        }
+    }
+
+    closeLeaderboard() {
+        this.game.triggerHaptic(10);
+        if (this.overlay) {
+            this.overlay.classList.add('hidden');
+        }
+    }
+
+    onGameOver() {
+        this.hasSubmittedThisSession = false;
+        if (this.submitBox) {
+            if (this.game.score > 0) {
+                this.submitBox.classList.remove('hidden');
+                const saved = localStorage.getItem('paddlecraft_callsign') || '';
+                if (this.callsignInput) {
+                    this.callsignInput.value = saved;
+                    this.callsignInput.disabled = false;
+                }
+                if (this.submitBtn) {
+                    this.submitBtn.disabled = false;
+                    this.submitBtn.textContent = 'SUBMIT';
+                }
+                if (this.submitMsg) {
+                    this.submitMsg.textContent = '';
+                    this.submitMsg.className = 'submit-msg hidden';
+                }
+            } else {
+                this.submitBox.classList.add('hidden');
+            }
+        }
+    }
+
+    async fetchLeaderboard() {
+        this.showLoading();
+        try {
+            const resp = await fetch(this.apiBase, { method: 'GET' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            if (data && data.success && Array.isArray(data.leaderboard)) {
+                this.renderLeaderboard(data.leaderboard);
+            } else {
+                throw new Error(data.error || 'Invalid response');
+            }
+        } catch (err) {
+            console.warn('[Leaderboard] Fetch failed:', err);
+            this.showError('Unable to connect to leaderboard server.');
+        }
+    }
+
+    async submitScore() {
+        if (this.hasSubmittedThisSession) return;
+        const callsign = (this.callsignInput?.value || '').trim().toUpperCase();
+        if (callsign.length < 2) {
+            this.showSubmitMessage('Callsign must be at least 2 characters.', 'error');
+            return;
+        }
+
+        const score = this.game.score;
+        const stage = this.game.level || 1;
+        const clears = this.game.linesCleared || 0;
+
+        if (score <= 0) {
+            this.showSubmitMessage('Score must be greater than 0 to submit.', 'error');
+            return;
+        }
+
+        this.submitBtn.disabled = true;
+        this.submitBtn.textContent = 'SUBMITTING...';
+        this.callsignInput.disabled = true;
+
+        try {
+            const resp = await fetch(this.apiBase, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: callsign,
+                    score: score,
+                    stage: stage,
+                    clears: clears
+                })
+            });
+
+            const data = await resp.json();
+            if (resp.ok && data.success) {
+                this.hasSubmittedThisSession = true;
+                localStorage.setItem('paddlecraft_callsign', callsign);
+                this.lastSubmittedId = data.entry ? data.entry.id : null;
+                this.showSubmitMessage(`Rank #${data.rank || '?'} locked in! 🎉`, 'success');
+                this.submitBtn.textContent = 'SUBMITTED';
+
+                // Automatically pop open leaderboard after 750ms to celebrate
+                setTimeout(() => {
+                    this.openLeaderboard();
+                }, 750);
+            } else {
+                throw new Error(data.error || 'Submission failed');
+            }
+        } catch (err) {
+            console.error('[Leaderboard] Submit error:', err);
+            this.submitBtn.disabled = false;
+            this.submitBtn.textContent = 'RETRY';
+            this.callsignInput.disabled = false;
+            this.showSubmitMessage(err.message || 'Submission failed. Server waking up?', 'error');
+        }
+    }
+
+    showSubmitMessage(msg, type) {
+        if (!this.submitMsg) return;
+        this.submitMsg.textContent = msg;
+        this.submitMsg.className = `submit-msg ${type}`;
+        this.submitMsg.classList.remove('hidden');
+    }
+
+    showLoading() {
+        this.loadingEl?.classList.remove('hidden');
+        this.errorEl?.classList.add('hidden');
+        this.listWrapEl?.classList.add('hidden');
+    }
+
+    showError(msg) {
+        this.loadingEl?.classList.add('hidden');
+        if (this.errorTextEl) this.errorTextEl.textContent = msg;
+        this.errorEl?.classList.remove('hidden');
+        this.listWrapEl?.classList.add('hidden');
+    }
+
+    renderLeaderboard(entries) {
+        this.loadingEl?.classList.add('hidden');
+        this.errorEl?.classList.add('hidden');
+        this.listWrapEl?.classList.remove('hidden');
+
+        if (!this.itemsEl) return;
+        this.itemsEl.innerHTML = '';
+
+        if (entries.length === 0) {
+            this.itemsEl.innerHTML = '<div style="padding: 28px; text-align: center; color: var(--text-tertiary);">No rankings recorded yet. Be the first!</div>';
+            return;
+        }
+
+        entries.forEach((entry, idx) => {
+            const rank = idx + 1;
+            const row = document.createElement('div');
+            row.className = 'leaderboard-row';
+            if (this.lastSubmittedId && entry.id === this.lastSubmittedId) {
+                row.classList.add('highlight-me');
+            }
+
+            let rankBadgeHtml = `<span class="col-rank">${rank}</span>`;
+            if (rank === 1) rankBadgeHtml = `<span class="rank-badge rank-1">1</span>`;
+            else if (rank === 2) rankBadgeHtml = `<span class="rank-badge rank-2">2</span>`;
+            else if (rank === 3) rankBadgeHtml = `<span class="rank-badge rank-3">3</span>`;
+
+            row.innerHTML = `
+                ${rankBadgeHtml}
+                <span class="col-name" title="${this.escapeHtml(entry.name)}">${this.escapeHtml(entry.name)}</span>
+                <span class="col-score">${Number(entry.score).toLocaleString()}</span>
+                <span class="col-stage">ST.${entry.stage || 1}</span>
+            `;
+            this.itemsEl.appendChild(row);
+        });
+    }
+
+    escapeHtml(str) {
+        return (str || '').replace(/[&<>"']/g, m => ({
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#39;'
+        })[m]);
+    }
+}
+
 // Master Game Controller
 class Game {
     constructor() {
@@ -1154,6 +1407,7 @@ class Game {
         this.ballLostTimer = 0;
 
         this.tutorial = new TutorialManager(this);
+        this.leaderboard = new LeaderboardManager(this);
 
         this.initDOMEvents();
         this.updateHUD();
@@ -1469,6 +1723,7 @@ class Game {
         this.overlayStart.classList.add('hidden');
         this.overlayGameOver.classList.add('hidden');
         this.overlayStageClear.classList.add('hidden');
+        if (this.leaderboard) this.leaderboard.closeLeaderboard();
         if (this.tutorial.overlayComplete) this.tutorial.overlayComplete.classList.add('hidden');
         if (this.tutorial.elBanner) this.tutorial.elBanner.classList.add('hidden');
 
@@ -1660,6 +1915,7 @@ class Game {
         document.getElementById('final-combo').textContent = `x${this.combo}`;
         this.overlayGameOver.classList.remove('hidden');
         this.elDangerBanner.classList.add('hidden');
+        if (this.leaderboard) this.leaderboard.onGameOver();
     }
 
     startStageClear(lastX, lastY) {
