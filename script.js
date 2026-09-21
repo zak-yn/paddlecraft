@@ -1222,7 +1222,7 @@ class Game {
             }
         });
 
-        // Smooth Relative Touch Drag, Tap-to-Rotate, and Downward Swipe Drop
+        // Smooth Relative Touch Drag, Rapid Tap-to-Rotate, and Deliberate Downward Swipe Drop
         let touchActive = false;
         let lastTouchX = 0;
         let lastTouchY = 0;
@@ -1231,7 +1231,6 @@ class Game {
         let touchStartTime = 0;
         let touchTotalDist = 0;
         let isDropTriggered = false;
-        let lastTapTime = 0;
 
         this.canvas.addEventListener('touchstart', (e) => {
             if (this.state !== 'PLAYING' && this.state !== 'TUTORIAL') return;
@@ -1268,8 +1267,8 @@ class Game {
             lastTouchY = t.clientY;
             touchTotalDist += Math.hypot(deltaX, deltaY);
 
-            // Fast swipe-down gesture for Hard Drop
-            if (totalDy > 32 && totalDy > Math.abs(totalDx) * 1.3) {
+            // Deliberate swipe-down gesture for Hard Drop (requires intentional downward stroke)
+            if (totalDy > 50 && totalDy > Math.abs(totalDx) * 1.6) {
                 if (this.currentPiece && !this.currentPiece.isHardDropping) {
                     this.currentPiece.isHardDropping = true;
                     this.triggerHaptic(25);
@@ -1296,9 +1295,9 @@ class Game {
 
             const duration = performance.now() - touchStartTime;
 
-            // Pure Tap: finger moved very little (< 10px) and lifted quickly (< 280ms)
-            // -> Rotate tetromino with ZERO paddle displacement!
-            if (!isDropTriggered && touchTotalDist < 10 && duration < 280) {
+            // Pure Tap: finger lifted cleanly (< 18px total finger jitter) and quickly (< 320ms)
+            // -> Rotate tetromino with ZERO paddle displacement and reliable multi-tap chaining!
+            if (!isDropTriggered && touchTotalDist < 18 && duration < 320) {
                 if (this.currentPiece) {
                     this.currentPiece.rotate();
                     this.triggerHaptic(12);
