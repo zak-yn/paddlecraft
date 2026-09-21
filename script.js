@@ -1089,7 +1089,6 @@ class TutorialManager {
 class LeaderboardManager {
     constructor(game) {
         this.game = game;
-        this.apiBase = '/api/leaderboard';
         this.overlay = document.getElementById('leaderboard-overlay');
         this.loadingEl = document.getElementById('leaderboard-loading');
         this.errorEl = document.getElementById('leaderboard-error');
@@ -1116,7 +1115,26 @@ class LeaderboardManager {
         this.init();
     }
 
+    getApiUrl(endpoint) {
+        const host = window.location.hostname;
+        // If testing on local development or directly on Render host
+        if (host === 'localhost' || host === '127.0.0.1' || host.includes('onrender.com')) {
+            return endpoint;
+        }
+        // If accessed from GitHub Pages (zak-yn.github.io) or any custom static domain
+        return `https://paddlecraft.onrender.com${endpoint}`;
+    }
+
+    prewarmBackend() {
+        try {
+            const url = this.getApiUrl('/api/health');
+            fetch(url, { method: 'GET', mode: 'cors' }).catch(() => {});
+        } catch (e) {}
+    }
+
     init() {
+        this.prewarmBackend();
+
         if (this.triggerNavBtn) {
             this.triggerNavBtn.addEventListener('click', () => this.openLeaderboard());
         }
@@ -1197,20 +1215,41 @@ class LeaderboardManager {
         }
     }
 
+    async parseResponse(resp) {
+        const text = await resp.text();
+        const trimmed = text.trim();
+        if (trimmed.startsWith('<') || trimmed.includes('<!DOCTYPE') || trimmed.includes('<html')) {
+            throw new Error('Server is waking up (Render free tier). Please tap RETRY in a few moments.');
+        }
+        try {
+            return JSON.parse(text);
+        } catch (err) {
+            throw new Error('Server is waking up. Please tap RETRY in a moment.');
+        }
+    }
+
     async fetchLeaderboard() {
         this.showLoading();
+        const url = this.getApiUrl('/api/leaderboard');
         try {
-            const resp = await fetch(this.apiBase, { method: 'GET' });
-            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            const data = await resp.json();
-            if (data && data.success && Array.isArray(data.leaderboard)) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 12000);
+            const resp = await fetch(url, { method: 'GET', signal: controller.signal });
+            clearTimeout(timeoutId);
+
+            const data = await this.parseResponse(resp);
+            if (resp.ok && data && data.success && Array.isArray(data.leaderboard)) {
                 this.renderLeaderboard(data.leaderboard);
             } else {
-                throw new Error(data.error || 'Invalid response');
+                throw new Error(data.error || 'Unable to load rankings.');
             }
         } catch (err) {
             console.warn('[Leaderboard] Fetch failed:', err);
-            this.showError('Unable to connect to leaderboard server.');
+            const isWaking = err.name === 'AbortError' || (err.message && err.message.includes('waking up'));
+            const errorMsg = isWaking
+                ? 'Server is waking up (Render free tier). Please wait 10s and click Retry.'
+                : (err.message || 'Unable to connect to leaderboard server.');
+            this.showError(errorMsg);
         }
     }
 
@@ -1235,8 +1274,13 @@ class LeaderboardManager {
         this.submitBtn.textContent = 'SUBMITTING...';
         this.callsignInput.disabled = true;
 
+        const url = this.getApiUrl('/api/leaderboard');
+
         try {
-            const resp = await fetch(this.apiBase, {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+            const resp = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1244,10 +1288,12 @@ class LeaderboardManager {
                     score: score,
                     stage: stage,
                     clears: clears
-                })
+                }),
+                signal: controller.signal
             });
+            clearTimeout(timeoutId);
 
-            const data = await resp.json();
+            const data = await this.parseResponse(resp);
             if (resp.ok && data.success) {
                 this.hasSubmittedThisSession = true;
                 localStorage.setItem('paddlecraft_callsign', callsign);
@@ -1260,14 +1306,19 @@ class LeaderboardManager {
                     this.openLeaderboard();
                 }, 750);
             } else {
-                throw new Error(data.error || 'Submission failed');
+                throw new Error(data.error || 'Submission failed.');
             }
         } catch (err) {
             console.error('[Leaderboard] Submit error:', err);
             this.submitBtn.disabled = false;
             this.submitBtn.textContent = 'RETRY';
             this.callsignInput.disabled = false;
-            this.showSubmitMessage(err.message || 'Submission failed. Server waking up?', 'error');
+
+            const isWaking = err.name === 'AbortError' || (err.message && err.message.includes('waking up'));
+            const userMsg = isWaking
+                ? 'Server is waking up (Render free tier). Please wait 10s and tap RETRY.'
+                : (err.message || 'Submission failed. Please tap RETRY.');
+            this.showSubmitMessage(userMsg, 'error');
         }
     }
 
@@ -1730,6 +1781,7 @@ class Game {
         this.state = 'PLAYING';
         this.sound.startBGM();
         this.updateHUD();
+        if (this.leaderboard) this.leaderboard.prewarmBackend();
     }
 
     setupStage() {
