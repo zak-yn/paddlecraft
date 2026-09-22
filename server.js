@@ -21,6 +21,8 @@ const REDIS_KEY = 'paddlecraft_leaderboard';
 
 // Initial leaderboard seeds if completely new
 const SEED_ENTRIES = [
+    { id: 'champ-zak', name: 'ZAK', score: 2122100, stage: 8, clears: 40, createdAt: '2026-09-22T02:41:41.542Z' },
+    { id: 'champ-yn', name: 'YN', score: 185400, stage: 6, clears: 15, createdAt: '2026-09-21T18:30:00.000Z' },
     { id: 'seed-1', name: 'CYBER_ACE', score: 14200, stage: 5, clears: 8, createdAt: new Date(Date.now() - 86400000 * 2).toISOString() },
     { id: 'seed-2', name: 'NEO_PADDLE', score: 9800, stage: 4, clears: 5, createdAt: new Date(Date.now() - 86400000).toISOString() },
     { id: 'seed-3', name: 'BLOCK_MASTER', score: 6500, stage: 3, clears: 3, createdAt: new Date(Date.now() - 43200000).toISOString() },
@@ -29,16 +31,27 @@ const SEED_ENTRIES = [
 
 async function fetchFromUpstash() {
     if (!HAS_UPSTASH) return null;
+    const baseUrl = UPSTASH_URL.replace(/\/$/, '');
     try {
-        const baseUrl = UPSTASH_URL.replace(/\/$/, '');
         const resp = await fetch(`${baseUrl}/get/${REDIS_KEY}`, {
             headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
-            signal: AbortSignal.timeout(4000)
+            signal: AbortSignal.timeout(5000)
         });
-        if (!resp.ok) return null;
+        if (!resp.ok) {
+            console.warn(`[Upstash] Read failed HTTP ${resp.status}`);
+            return null;
+        }
         const data = await resp.json();
-        if (data && data.result) {
-            const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+        if (data && data.result !== undefined && data.result !== null) {
+            let parsed = data.result;
+            // Robustly unwrap any nested JSON stringification layers
+            while (typeof parsed === 'string') {
+                try {
+                    parsed = JSON.parse(parsed);
+                } catch {
+                    break;
+                }
+            }
             if (Array.isArray(parsed) && parsed.length > 0) {
                 return parsed;
             }
@@ -52,22 +65,49 @@ async function fetchFromUpstash() {
 
 async function saveToUpstash(entries) {
     if (!HAS_UPSTASH) return false;
+    const baseUrl = UPSTASH_URL.replace(/\/$/, '');
+    const payload = JSON.stringify(entries);
+
+    // Method 1: Standard Upstash Redis Command API (POST / with ["SET", key, val])
     try {
-        const baseUrl = UPSTASH_URL.replace(/\/$/, '');
-        const resp = await fetch(`${baseUrl}/set/${REDIS_KEY}`, {
+        const resp = await fetch(`${baseUrl}`, {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${UPSTASH_TOKEN}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(JSON.stringify(entries)),
-            signal: AbortSignal.timeout(4000)
+            body: JSON.stringify(['SET', REDIS_KEY, payload]),
+            signal: AbortSignal.timeout(5000)
         });
-        return resp.ok;
+        if (resp.ok) {
+            const data = await resp.json().catch(() => ({}));
+            if (data && (data.result === 'OK' || data.result === true)) {
+                return true;
+            }
+        }
     } catch (err) {
-        console.warn('[Upstash] Write warning:', err.message);
-        return false;
+        console.warn('[Upstash] Method 1 save warning:', err.message);
     }
+
+    // Method 2: REST fallback: POST /set/{key} with raw payload
+    try {
+        const resp2 = await fetch(`${baseUrl}/set/${REDIS_KEY}`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${UPSTASH_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: payload,
+            signal: AbortSignal.timeout(5000)
+        });
+        if (resp2.ok) {
+            return true;
+        }
+    } catch (err2) {
+        console.error('[Upstash] Method 2 save error:', err2.message);
+    }
+
+    return false;
 }
 
 function loadLocalLeaderboard() {
@@ -98,16 +138,25 @@ function saveLocalLeaderboard(entries) {
 }
 
 async function loadLeaderboard() {
-    // 1. Try Upstash Cloud (Primary source of truth)
+    // 1. Try Upstash Cloud (Primary persistent source of truth)
     const cloudEntries = await fetchFromUpstash();
-    if (cloudEntries) {
-        // Sync local cache
+    if (cloudEntries && cloudEntries.length > 0) {
+        // Keep local cache synced
         saveLocalLeaderboard(cloudEntries);
         return cloudEntries;
     }
 
     // 2. Fallback to local storage
-    return loadLocalLeaderboard();
+    const local = loadLocalLeaderboard();
+
+    // If cloud is uninitialized or newly created, bootstrap cloud with current entries
+    if (HAS_UPSTASH && local && local.length > 0) {
+        saveToUpstash(local).catch(err => {
+            console.warn('[Upstash] Bootstrap failed:', err.message);
+        });
+    }
+
+    return local;
 }
 
 async function saveLeaderboard(entries) {
@@ -120,12 +169,16 @@ async function saveLeaderboard(entries) {
 
     const trimmed = entries.slice(0, 200);
 
-    // Save locally
+    // 1. Save locally immediately
     saveLocalLeaderboard(trimmed);
 
-    // Save to Cloud asynchronously
+    // 2. Persist to Cloud synchronously so response is sent only after cloud write succeeds
     if (HAS_UPSTASH) {
-        saveToUpstash(trimmed).catch(() => {});
+        try {
+            await saveToUpstash(trimmed);
+        } catch (err) {
+            console.error('[Leaderboard] Cloud sync error in saveLeaderboard:', err.message);
+        }
     }
 
     return trimmed;
@@ -145,13 +198,34 @@ setInterval(() => {
 app.use(cors());
 app.use(express.json({ limit: '64kb' }));
 
-// Health check
-app.get('/api/health', (req, res) => {
+// Health check with storage diagnostics
+app.get('/api/health', async (req, res) => {
+    let cloudStatus = 'disabled';
+    let cloudCount = 0;
+    if (HAS_UPSTASH) {
+        try {
+            const cloudEntries = await fetchFromUpstash();
+            if (cloudEntries && cloudEntries.length > 0) {
+                cloudStatus = 'connected';
+                cloudCount = cloudEntries.length;
+            } else {
+                cloudStatus = 'empty_or_syncing';
+            }
+        } catch (e) {
+            cloudStatus = 'error: ' + e.message;
+        }
+    }
+    const localEntries = loadLocalLeaderboard();
     res.json({
         status: 'ok',
         game: 'paddlecraft',
         uptime: Math.round(process.uptime()),
         storage: HAS_UPSTASH ? 'upstash-cloud-persistent' : 'local-ephemeral',
+        cloud: {
+            status: cloudStatus,
+            count: cloudCount
+        },
+        localCount: localEntries.length,
         timestamp: new Date().toISOString()
     });
 });
