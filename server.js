@@ -13,6 +13,12 @@ if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
+// Upstash Redis Cloud Configuration (Free Serverless Persistence)
+const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL;
+const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
+const HAS_UPSTASH = Boolean(UPSTASH_URL && UPSTASH_TOKEN);
+const REDIS_KEY = 'paddlecraft_leaderboard';
+
 // Initial leaderboard seeds if completely new
 const SEED_ENTRIES = [
     { id: 'seed-1', name: 'CYBER_ACE', score: 14200, stage: 5, clears: 8, createdAt: new Date(Date.now() - 86400000 * 2).toISOString() },
@@ -21,7 +27,50 @@ const SEED_ENTRIES = [
     { id: 'seed-4', name: 'ARCADE_PILOT', score: 3200, stage: 2, clears: 2, createdAt: new Date(Date.now() - 7200000).toISOString() }
 ];
 
-function loadLeaderboard() {
+async function fetchFromUpstash() {
+    if (!HAS_UPSTASH) return null;
+    try {
+        const baseUrl = UPSTASH_URL.replace(/\/$/, '');
+        const resp = await fetch(`${baseUrl}/get/${REDIS_KEY}`, {
+            headers: { Authorization: `Bearer ${UPSTASH_TOKEN}` },
+            signal: AbortSignal.timeout(4000)
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (data && data.result) {
+            const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed;
+            }
+        }
+        return null;
+    } catch (err) {
+        console.warn('[Upstash] Read warning:', err.message);
+        return null;
+    }
+}
+
+async function saveToUpstash(entries) {
+    if (!HAS_UPSTASH) return false;
+    try {
+        const baseUrl = UPSTASH_URL.replace(/\/$/, '');
+        const resp = await fetch(`${baseUrl}/set/${REDIS_KEY}`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${UPSTASH_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(JSON.stringify(entries)),
+            signal: AbortSignal.timeout(4000)
+        });
+        return resp.ok;
+    } catch (err) {
+        console.warn('[Upstash] Write warning:', err.message);
+        return false;
+    }
+}
+
+function loadLocalLeaderboard() {
     try {
         if (!fs.existsSync(LEADERBOARD_FILE)) {
             fs.writeFileSync(LEADERBOARD_FILE, JSON.stringify(SEED_ENTRIES, null, 2), 'utf8');
@@ -29,40 +78,60 @@ function loadLeaderboard() {
         }
         const raw = fs.readFileSync(LEADERBOARD_FILE, 'utf8');
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
+        if (Array.isArray(parsed) && parsed.length > 0) {
             return parsed;
         }
         return [...SEED_ENTRIES];
     } catch (err) {
-        console.error('[Leaderboard] Error loading file:', err);
         return [...SEED_ENTRIES];
     }
 }
 
-function saveLeaderboard(entries) {
+function saveLocalLeaderboard(entries) {
     try {
-        // Sort descending by score, tiebreak by stage descending, then earlier timestamp
-        entries.sort((a, b) => {
-            if (b.score !== a.score) return b.score - a.score;
-            if (b.stage !== a.stage) return b.stage - a.stage;
-            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-        });
-
-        // Retain top 200 entries
-        const trimmed = entries.slice(0, 200);
-
-        // Atomic write
         const tempPath = LEADERBOARD_FILE + '.tmp';
-        fs.writeFileSync(tempPath, JSON.stringify(trimmed, null, 2), 'utf8');
+        fs.writeFileSync(tempPath, JSON.stringify(entries, null, 2), 'utf8');
         fs.renameSync(tempPath, LEADERBOARD_FILE);
-        return trimmed;
     } catch (err) {
-        console.error('[Leaderboard] Error saving file:', err);
-        return entries;
+        console.error('[Leaderboard] Local write error:', err);
     }
 }
 
-// In-memory rate limiting by IP (max 1 score submission per 10 seconds per IP)
+async function loadLeaderboard() {
+    // 1. Try Upstash Cloud (Primary source of truth)
+    const cloudEntries = await fetchFromUpstash();
+    if (cloudEntries) {
+        // Sync local cache
+        saveLocalLeaderboard(cloudEntries);
+        return cloudEntries;
+    }
+
+    // 2. Fallback to local storage
+    return loadLocalLeaderboard();
+}
+
+async function saveLeaderboard(entries) {
+    // Sort descending by score, tiebreak by stage descending, then earlier timestamp
+    entries.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (b.stage !== a.stage) return b.stage - a.stage;
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+    });
+
+    const trimmed = entries.slice(0, 200);
+
+    // Save locally
+    saveLocalLeaderboard(trimmed);
+
+    // Save to Cloud asynchronously
+    if (HAS_UPSTASH) {
+        saveToUpstash(trimmed).catch(() => {});
+    }
+
+    return trimmed;
+}
+
+// In-memory rate limiting by IP (max 1 score submission per 8 seconds per IP)
 const ipRateMap = new Map();
 setInterval(() => {
     const now = Date.now();
@@ -82,14 +151,15 @@ app.get('/api/health', (req, res) => {
         status: 'ok',
         game: 'paddlecraft',
         uptime: Math.round(process.uptime()),
+        storage: HAS_UPSTASH ? 'upstash-cloud-persistent' : 'local-ephemeral',
         timestamp: new Date().toISOString()
     });
 });
 
 // GET Leaderboard (Top 50)
-app.get('/api/leaderboard', (req, res) => {
+app.get('/api/leaderboard', async (req, res) => {
     try {
-        const entries = loadLeaderboard();
+        const entries = await loadLeaderboard();
         const top50 = entries.slice(0, 50).map((item, index) => ({
             rank: index + 1,
             id: item.id,
@@ -99,14 +169,14 @@ app.get('/api/leaderboard', (req, res) => {
             clears: item.clears || 0,
             createdAt: item.createdAt
         }));
-        res.json({ success: true, count: top50.length, leaderboard: top50 });
+        res.json({ success: true, count: top50.length, storage: HAS_UPSTASH ? 'cloud' : 'local', leaderboard: top50 });
     } catch (err) {
         res.status(500).json({ success: false, error: 'Internal server error reading leaderboard' });
     }
 });
 
 // POST Score Submission
-app.post('/api/leaderboard', (req, res) => {
+app.post('/api/leaderboard', async (req, res) => {
     try {
         const clientIp = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || 'unknown';
         const now = Date.now();
@@ -163,9 +233,9 @@ app.post('/api/leaderboard', (req, res) => {
             createdAt: new Date().toISOString()
         };
 
-        const currentEntries = loadLeaderboard();
+        const currentEntries = await loadLeaderboard();
         currentEntries.push(newEntry);
-        const updated = saveLeaderboard(currentEntries);
+        const updated = await saveLeaderboard(currentEntries);
 
         // Find rank of the newly added item
         const rankIndex = updated.findIndex(e => e.id === newEntry.id);
